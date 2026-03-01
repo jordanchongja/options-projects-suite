@@ -77,6 +77,12 @@ class Instrument(ABC):
         if T <= dT: return 0.0
         # Theta is time decay, so Price(T - 1 day) - Price(T)
         return (self.price(S, T - dT, r, sigma) - self.price(S, T, r, sigma))
+    
+    def rho(self, S, T, r, sigma):
+        dr = 0.0001 # 1 basis point bump
+        up = self.price(S, T, r + dr, sigma)
+        dn = self.price(S, T, r - dr, sigma)
+        return (up - dn) / (2 * dr) / 100 # Scaled to a 1% rate change
 
 class Stock(Instrument):
     def __init__(self, position=1.0, sigma_override=None):
