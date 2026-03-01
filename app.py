@@ -524,7 +524,7 @@ with tab2:
 # ==========================================
 # TAB 3: ADVANCED PRICING (Merton & Heston)
 # ==========================================
-with tab2:
+with tab3:
     st.subheader("Advanced Pricing Models")
     st.markdown("Compare standard Black-Scholes against models that handle **Jumps (Merton)** or **Stochastic Volatility (Heston)**.")
     
@@ -607,7 +607,7 @@ with tab2:
 # ==========================================
 # TAB 4: VOLATILITY SURFACE (WRDS STYLE)
 # ==========================================
-with tab3:
+with tab4:
     st.subheader("Market Reality: Volatility Surface Analysis")
     st.markdown("Visualizing the **Implied Volatility Smile** across Strikes and Maturities (Simulated WRDS OptionMetrics Data).")
 
