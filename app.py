@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from math import factorial
 import cmath
 from scipy.integrate import quad
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots # Add this import
 
 # ==========================================
 # 0. CONFIG & SHARED STATE
@@ -311,7 +313,7 @@ with st.sidebar:
     st.divider()
 
 # --- TABS ---
-tab1, tab2, tab3 = st.tabs(["1. Structuring (Payoff)", "2. Pricing Models (Jump)", "3. Vol Surface (WRDS)"])
+tab1, tab2, tab3, tab4 = st.tabs(["1. Structuring", "2. Greeks Explorer", "3. Pricing Models", "4. Vol Surface"])
 
 # ==========================================
 # TAB 1: THE STRUCTURER
@@ -438,7 +440,89 @@ with tab1:
             st.table(greeks_df.style.set_properties(**{'text-align': 'center'}))
 
 # ==========================================
-# TAB 2: ADVANCED PRICING (Merton & Heston)
+# TAB 2: GREEKS EXPLORER
+# ==========================================
+with tab2:
+    st.subheader("Options Greeks Sensitivity Analysis")
+    st.markdown("Visualize the non-linear dynamics of options. Observe how Gamma peaks and Theta decay accelerates for ATM options near expiry.")
+    
+    col_ctrl, col_viz = st.columns([1, 3])
+    
+    with col_ctrl:
+        st.markdown("**Parameters**")
+        x_axis = st.radio("Independent Variable (X-Axis)", ["Time to Expiry (T)", "Spot Price (S)"])
+        opt_type = st.radio("Option Type", ["Call", "Put"], horizontal=True)
+        K_val = st.number_input("Strike Price (K)", value=100.0, step=0.5)
+        
+        st.divider()
+        st.markdown("**Static Inputs**")
+        if x_axis == "Time to Expiry (T)":
+            st.info("Visualizing ATM vs ITM vs OTM over time.")
+            S_vals = [K_val, K_val * 1.1, K_val * 0.9]
+            labels = ["ATM (Spot=100)", "ITM (Spot=110)", "OTM (Spot=90)"] if opt_type == "Call" else ["ATM (Spot=100)", "OTM (Spot=110)", "ITM (Spot=90)"]
+            x_label = "Time to Expiry (Years)"
+        else:
+            st.info("Visualizing different maturities across spot prices.")
+            T_vals = [1.0, 0.25, 0.02]
+            labels = ["1 Year", "3 Months", "~1 Week"]
+            x_label = "Spot Price ($)"
+
+    with col_viz:
+        # Create a 2x2 Subplot Grid
+        fig_greeks = make_subplots(
+            rows=2, cols=2, 
+            subplot_titles=("Delta (Δ)", "Gamma (Γ)", "Theta (Θ)", "Vega (ν)"),
+            horizontal_spacing=0.1, vertical_spacing=0.15
+        )
+
+        dummy_opt = VanillaOption(K=K_val, option_type=opt_type, position=1.0)
+        
+        # Scenario A: X-Axis is Time to Expiry
+        if x_axis == "Time to Expiry (T)":
+            x_range = np.linspace(1.0, 0.01, 100) # 1 year down to ~3 days
+            
+            for S, label in zip(S_vals, labels):
+                d, g, t, v = [], [], [], []
+                for t_val in x_range:
+                    d.append(dummy_opt.delta(S, t_val, r_curr, sigma_curr))
+                    g.append(dummy_opt.gamma(S, t_val, r_curr, sigma_curr))
+                    t.append(dummy_opt.theta(S, t_val, r_curr, sigma_curr))
+                    v.append(dummy_opt.vega(S, t_val, r_curr, sigma_curr))
+                
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=d, mode='lines', name=label), row=1, col=1)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=g, mode='lines', name=label, showlegend=False), row=1, col=2)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=t, mode='lines', name=label, showlegend=False), row=2, col=1)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=v, mode='lines', name=label, showlegend=False), row=2, col=2)
+            
+            # Reverse X-axis so time moves from left (1.0) to right (0.0)
+            fig_greeks.update_xaxes(autorange="reversed")
+
+        # Scenario B: X-Axis is Spot Price
+        else:
+            x_range = np.linspace(K_val * 0.6, K_val * 1.4, 100)
+            
+            for T_val, label in zip(T_vals, labels):
+                d, g, t, v = [], [], [], []
+                for s_val in x_range:
+                    d.append(dummy_opt.delta(s_val, T_val, r_curr, sigma_curr))
+                    g.append(dummy_opt.gamma(s_val, T_val, r_curr, sigma_curr))
+                    t.append(dummy_opt.theta(s_val, T_val, r_curr, sigma_curr))
+                    v.append(dummy_opt.vega(s_val, T_val, r_curr, sigma_curr))
+                
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=d, mode='lines', name=label), row=1, col=1)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=g, mode='lines', name=label, showlegend=False), row=1, col=2)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=t, mode='lines', name=label, showlegend=False), row=2, col=1)
+                fig_greeks.add_trace(go.Scatter(x=x_range, y=v, mode='lines', name=label, showlegend=False), row=2, col=2)
+            
+            fig_greeks.add_vline(x=K_val, line_dash="dot", row='all', col='all', annotation_text="Strike")
+
+        fig_greeks.update_layout(height=700, hovermode="x unified", title_text="First & Second Order Sensitivities")
+        fig_greeks.update_xaxes(title_text=x_label)
+        st.plotly_chart(fig_greeks, use_container_width=True)
+
+
+# ==========================================
+# TAB 3: ADVANCED PRICING (Merton & Heston)
 # ==========================================
 with tab2:
     st.subheader("Advanced Pricing Models")
@@ -521,7 +605,7 @@ with tab2:
             c2.metric(f"{model_choice} Value", f"${current_model:.2f}", delta=f"{diff:.2f}")
 
 # ==========================================
-# TAB 3: VOLATILITY SURFACE (WRDS STYLE)
+# TAB 4: VOLATILITY SURFACE (WRDS STYLE)
 # ==========================================
 with tab3:
     st.subheader("Market Reality: Volatility Surface Analysis")
