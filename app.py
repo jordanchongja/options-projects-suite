@@ -56,6 +56,22 @@ class ZeroCouponBond(Instrument):
         side = "Long" if self.position > 0 else "Short"
         return f"{side} Zero Bond (Face: {self.face_value})"
 
+class Stock(Instrument):
+    def __init__(self, position=1.0):
+        super().__init__(position)
+
+    def price(self, S, T, r, sigma):
+        # The theoretical present value of a non-dividend stock is just its spot price.
+        return self.position * S
+
+    def payoff(self, S):
+        # At expiration, the payoff is simply the terminal value of the stock.
+        return self.position * S
+
+    def name(self):
+        side = "Long" if self.position > 0 else "Short"
+        return f"{side} Stock"
+
 class VanillaOption(Instrument):
     def __init__(self, K, option_type='call', position=1.0):
         super().__init__(position)
@@ -268,7 +284,7 @@ with tab1:
     
     with col_ctrl:
         st.subheader("Add Legs")
-        inst_type = st.selectbox("Type", ["Vanilla Option", "Digital Option", "Zero Bond"])
+        inst_type = st.selectbox("Type", ["Vanilla Option", "Digital Option", "Zero Bond", "Stock"])
         side = st.selectbox("Side", ["Long", "Short"])
         pos = 1.0 if side == "Long" else -1.0
         
@@ -289,6 +305,10 @@ with tab1:
             face = st.number_input("Face Value", value=100.0)
             if st.button("Add Bond"):
                 st.session_state.portfolio.append(ZeroCouponBond(face, pos))
+
+        elif inst_type == "Stock":
+            if st.button("Add Stock"):
+                st.session_state.portfolio.append(Stock(pos))
         
         st.divider()
         st.markdown("**Current Portfolio:**")
