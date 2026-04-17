@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots # Add this import
 # 0. CONFIG & SHARED STATE
 # ==========================================
 st.set_page_config(page_title="Quant Structuring Desk", layout="wide")
-st.title("⚡ Quantitative Derivatives Workbench")
+st.title("⚡ Quantitative Derivatives Workbenchh")
 
 # Initialize Session State for Portfolio
 if 'portfolio' not in st.session_state:
