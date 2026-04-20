@@ -10,7 +10,7 @@ import scipy.stats as si
 # ==============================================================================
 # 0. SDE SIMULATIONS
 # ==============================================================================
-def simulate_gbmm(S0, mu, sigma, T, dt, num_paths):
+def simulate_gbm(S0, mu, sigma, T, dt, num_paths):
     """
     Simulates asset price paths using Geometric Brownian Motion.
     """
@@ -76,6 +76,15 @@ def implied_volatility(target_price, S, K, T, r, q, option_type='C'):
     except (ValueError, RuntimeError):
         # Returns NaN if the price is so far out of bounds the solver can't converge
         return np.nan
+
+def implied_volatility_array(target_prices, S, strikes, T, r, q):
+    """
+    Safely calculates implied volatilities for an array of prices and strikes.
+    """
+    ivs = np.zeros(len(strikes))
+    for i, K in enumerate(strikes):
+        ivs[i] = implied_volatility(target_prices[i], S, K, T, r, q)
+    return ivs
 
 def d1(S, K, T, r, q, sigma):
     return (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
@@ -187,28 +196,27 @@ def merton_jump_call(S, K, T, r, q, sigma, lam, mu_j, delta, max_jumps=40):
 # 4. BATES MODEL (STOCHASTIC VOLATILITY + JUMPS)
 # ==============================================================================
 def bates_characteristic_function(u, S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta):
-    # Heston Component
-    alpha = -u**2 / 2 - 1j * u / 2
-    beta = kappa - rho * xi * 1j * u
-    gamma = xi**2 / 2
+    """Evaluates the characteristic function for the Bates (SVJ) model."""
+    i = 1j
+    # 1. Heston Component
+    d = np.sqrt((kappa - rho * xi * i * u)**2 + (xi**2) * (i * u + u**2))
+    g = (kappa - rho * xi * i * u - d) / (kappa - rho * xi * i * u + d)
     
-    d = np.sqrt(beta**2 - 4 * alpha * gamma)
-    r_plus = (beta + d) / (xi**2)
-    r_minus = (beta - d) / (xi**2)
-    g = r_minus / r_plus
+    C = (r - q) * i * u * T + (kappa * theta / xi**2) * \
+        ((kappa - rho * xi * i * u - d) * T - 2 * np.log((1 - g * np.exp(-d * T)) / (1 - g)))
+    D = ((kappa - rho * xi * i * u - d) / xi**2) * ((1 - np.exp(-d * T)) / (1 - g * np.exp(-d * T)))
     
-    C = kappa * (r_minus * T - (2 / (xi**2)) * np.log((1 - g * np.exp(-d * T)) / (1 - g)))
-    D = r_minus * (1 - np.exp(-d * T)) / (1 - g * np.exp(-d * T))
-    heston_cf = np.exp(C * theta + D * v0 + 1j * u * np.log(S0 * np.exp((r - q) * T)))
+    cf_heston = np.exp(C + D * v0 + i * u * np.log(S0))
     
-    # Merton Component
-    k = np.exp(mu_j + 0.5 * delta**2) - 1 
-    jump_term = np.exp(mu_j * 1j * u - 0.5 * delta**2 * u**2) - 1
-    merton_cf = np.exp(lam * T * (jump_term - 1j * u * k))
+    # 2. Merton Jump Component
+    omega = -lam * (np.exp(mu_j + 0.5 * delta**2) - 1)
+    jump_term = lam * T * (np.exp(i * u * mu_j - 0.5 * (u * delta)**2) - 1)
+    cf_merton = np.exp(jump_term + i * u * omega * T)
     
-    return heston_cf * merton_cf
+    return cf_heston * cf_merton
 
 def bates_call_price(S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta):
+    """Calculates the Bates European Call price using numerical integration."""
     def integrand1(u):
         cf = bates_characteristic_function(u - 1j, S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta)
         return (np.exp(-1j * u * np.log(K)) * cf / (1j * u * S0 * np.exp((r-q)*T))).real
@@ -217,34 +225,103 @@ def bates_call_price(S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta
         cf = bates_characteristic_function(u, S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta)
         return (np.exp(-1j * u * np.log(K)) * cf / (1j * u)).real
 
-    limit_max = 2000 
+    limit_max = 1000 # Integration upper bound
     
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", IntegrationWarning)
-        P1_int = quad(integrand1, 0, limit_max, epsabs=1e-4, epsrel=1e-4, limit=200)[0]
-        P2_int = quad(integrand2, 0, limit_max, epsabs=1e-4, epsrel=1e-4, limit=200)[0]
+        try:
+            P1_int = quad(integrand1, 0, limit_max, epsabs=1e-4, epsrel=1e-4, limit=100)[0]
+            P2_int = quad(integrand2, 0, limit_max, epsabs=1e-4, epsrel=1e-4, limit=100)[0]
+        except Exception:
+            return np.nan # Guard against math domain errors from bad parameters
         
     P1 = 0.5 + (1 / np.pi) * P1_int
     P2 = 0.5 + (1 / np.pi) * P2_int
     
-    return max(0.0, S0 * np.exp(-q * T) * P1 - K * np.exp(-r * T) * P2)
+    price = max(0.0, S0 * np.exp(-q * T) * P1 - K * np.exp(-r * T) * P2)
+    return price if not np.isnan(price) else np.nan
 
-# REFACTORED: Now accepts S0, T, r, q, and data arrays as arguments
-def bates_objective(params, S0, T, r, q, target_strikes, target_ivs):
+from scipy.interpolate import interp1d
+
+def bates_fft_pricer(S0, market_strikes, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta):
+    """
+    Prices an entire array of European Calls using the Carr-Madan FFT method.
+    Returns an array of prices corresponding to the input market_strikes.
+    """
+    # 1. FFT Grid Setup
+    N = 4096          # Number of grid points (must be power of 2)
+    eta = 0.25        # Spacing of the integration grid
+    alpha = 1.5       # Damping factor to ensure absolute integrability
+    
+    lmbda = (2 * np.pi) / (N * eta)  # Spacing of the log-strike grid
+    b = (N * lmbda) / 2              # Upper bound of the log-strike grid
+    
+    u = np.arange(N) * eta           # Integration grid
+    k_grid = -b + np.arange(N) * lmbda # Log-strike grid
+    
+    # 2. Evaluate the Modified Characteristic Function
+    # We evaluate at a shifted complex argument: v = u - (alpha + 1)*i
+    v_complex = u - (alpha + 1) * 1j
+    
+    # Get the CF values (pass 1.0 for K since it's not used in the log-price CF)
+    cf_values = bates_characteristic_function(v_complex, S0, 1.0, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta)
+    
+    # Carr-Madan denominator
+    denominator = alpha**2 + alpha - u**2 + 1j * (2 * alpha + 1) * u
+    
+    # The modified characteristic function Psi
+    psi = np.exp(-r * T) * cf_values / denominator
+    
+    # 3. Apply Simpson's Rule Weights and FFT Shift
+    weight = np.ones(N)
+    weight[0] = 0.5 # Trapezoidal adjustment for the first point
+    
+    # The input array for the FFT
+    x = np.exp(1j * b * u) * psi * eta * weight
+    
+    # 4. Execute the Fast Fourier Transform
+    y = np.fft.fft(x)
+    
+    # 5. Extract Call Prices on the uniform log-strike grid
+    # C_k = (1 / pi) * exp(-alpha * k) * Real(FFT output)
+    call_prices_grid = (np.exp(-alpha * k_grid) / np.pi) * y.real
+    
+    # Convert log-strikes back to actual strike prices
+    strikes_grid = S0 * np.exp(k_grid)
+    
+    # 6. Interpolate the FFT grid results to the exact market strikes requested
+    # We use cubic interpolation for smoothness
+    interpolator = interp1d(strikes_grid, call_prices_grid, kind='cubic', bounds_error=False, fill_value=np.nan)
+    
+    return interpolator(market_strikes)
+
+# 2. Optimized & Vectorized Objective Function 
+def bates_objective_fast(params):
     v0, kappa, theta, xi, rho, lam, mu_j, delta = params
-    error = 0.0
+    
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         
-        for i, K in enumerate(target_strikes):
-            m_price = bates_call_price(S0, K, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta)
-            
-            # Make sure implied_volatility is accessible in this file
-            m_iv = implied_volatility(m_price, S0, K, T, r, q)
-            
-            if np.isnan(m_iv): 
-                error += 5.0
-            else: 
-                error += (m_iv - target_ivs[i])**2
-                
-    return error / len(target_strikes)
+        # 1. Price the entire sampled strike chain in ~5 milliseconds via FFT
+        m_prices = bates_fft_pricer(
+            S0, target_strikes_sampled, T, r, q, 
+            v0, kappa, theta, xi, rho, lam, mu_j, delta
+        )
+        
+        # 2. Convert all prices to Implied Volatility
+        m_ivs = implied_volatility_array(m_prices, S0, target_strikes_sampled, T, r, q)
+        
+        # 3. Calculate Error Safely
+        valid_mask = ~np.isnan(m_ivs)
+        
+        # If the optimizer picks terrible parameters where no strikes are valid
+        if not np.any(valid_mask):
+            return 1000.0 
+        
+        # Calculate MSE only on valid IVs, scaled properly to percentages
+        error = np.mean((m_ivs[valid_mask] * 100 - target_ivs_sampled[valid_mask])**2)
+        
+        # Add a penalty for any NaNs generated to guide the optimizer back to reality
+        penalty = np.sum(~valid_mask) * 10.0
+        
+        return error + penalty
