@@ -245,54 +245,43 @@ from scipy.interpolate import interp1d
 
 def bates_fft_pricer(S0, market_strikes, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta):
     """
-    Prices an entire array of European Calls using the Carr-Madan FFT method.
-    Returns an array of prices corresponding to the input market_strikes.
+    Prices an array of European Calls using the normalized Carr-Madan FFT method.
     """
-    # 1. FFT Grid Setup
-    N = 4096          # Number of grid points (must be power of 2)
-    eta = 0.25        # Spacing of the integration grid
-    alpha = 1.5       # Damping factor to ensure absolute integrability
+    N = 4096          
+    eta = 0.25        
+    alpha = 1.5       
     
-    lmbda = (2 * np.pi) / (N * eta)  # Spacing of the log-strike grid
-    b = (N * lmbda) / 2              # Upper bound of the log-strike grid
+    lmbda = (2 * np.pi) / (N * eta)  
+    b = (N * lmbda) / 2              
     
-    u = np.arange(N) * eta           # Integration grid
-    k_grid = -b + np.arange(N) * lmbda # Log-strike grid
+    u = np.arange(N) * eta           
+    k_grid = -b + np.arange(N) * lmbda 
     
-    # 2. Evaluate the Modified Characteristic Function
-    # We evaluate at a shifted complex argument: v = u - (alpha + 1)*i
     v_complex = u - (alpha + 1) * 1j
     
-    # Get the CF values (pass 1.0 for K since it's not used in the log-price CF)
-    cf_values = bates_characteristic_function(v_complex, S0, 1.0, T, r, q, v0, kappa, theta, xi, rho, lam, mu_j, delta)
+    # FIX: Pass S0=1.0 so the characteristic function calculates normalized log-moneyness
+    cf_values = bates_characteristic_function(
+        v_complex, 1.0, 1.0, T, r, q, 
+        v0, kappa, theta, xi, rho, lam, mu_j, delta
+    )
     
-    # Carr-Madan denominator
     denominator = alpha**2 + alpha - u**2 + 1j * (2 * alpha + 1) * u
-    
-    # The modified characteristic function Psi
     psi = np.exp(-r * T) * cf_values / denominator
     
-    # 3. Apply Simpson's Rule Weights and FFT Shift
     weight = np.ones(N)
-    weight[0] = 0.5 # Trapezoidal adjustment for the first point
+    weight[0] = 0.5 
     
-    # The input array for the FFT
     x = np.exp(1j * b * u) * psi * eta * weight
-    
-    # 4. Execute the Fast Fourier Transform
     y = np.fft.fft(x)
     
-    # 5. Extract Call Prices on the uniform log-strike grid
-    # C_k = (1 / pi) * exp(-alpha * k) * Real(FFT output)
-    call_prices_grid = (np.exp(-alpha * k_grid) / np.pi) * y.real
+    # Extract normalized call prices (C / S0)
+    norm_call_prices = (np.exp(-alpha * k_grid) / np.pi) * y.real
     
-    # Convert log-strikes back to actual strike prices
+    # FIX: Re-scale the normalized grid back to actual dollar amounts
     strikes_grid = S0 * np.exp(k_grid)
+    call_prices_grid = S0 * norm_call_prices
     
-    # 6. Interpolate the FFT grid results to the exact market strikes requested
-    # We use cubic interpolation for smoothness
     interpolator = interp1d(strikes_grid, call_prices_grid, kind='cubic', bounds_error=False, fill_value=np.nan)
-    
     return interpolator(market_strikes)
 
 # 2. Optimized & Vectorized Objective Function 
